@@ -9,7 +9,8 @@ mic_tcp_sock sock;
 mic_tcp_sock_addr addr_socket_dest;
 int PE = 0;
 int PA = 0;
-
+int nb_envoyes = 0;
+int numero_paquet = 0;
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -120,7 +121,7 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 		// On construit le PDU : header et payload
 		PDU.header.source_port = sock.addr.port;
 		PDU.header.dest_port   = addr_socket_dest.port;
-        PDU.header.seq_num     = PE++;
+        PDU.header.seq_num     = PE;
 		PDU.header.syn         = 0;
 		PDU.header.ack		   = 0;
 		PDU.header.fin		   = 0;
@@ -128,20 +129,27 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 		PDU.payload.data 	   = mesg;
 		PDU.payload.size	   = mesg_size;
 
-        int b = 0;
-        while(!b) {
+		PE = (PE+1)%2;
+
+        int fin = 0;
+        while(!fin) {
             sent_size = IP_send(PDU, addr_socket_dest);
+			printf("Envoi du paquet : %d, tentative n° : %d.\n",numero_paquet,nb_envoyes);
+			numero_paquet++;
+        	nb_envoyes++;
             sock.state = WAITING_FOR_ACK;
-            //Activation du timer:
+            // Activation du timer:
             if (IP_recv(&PDU, &addr_socket_dest, TIMER) == -1) {
                 // On renvoie le PDU si le timer a expiré
                 sent_size = IP_send(PDU, addr_socket_dest);
+				printf("Renvoi du paquet : %d, tentative n° : %d.\n",numero_paquet,nb_envoyes);
+				nb_envoyes++;
             }
-            //si le timer n'a pas expiré
+            // Si le timer n'a pas expiré
             else {
-                //on sort du while seulement si on a le bon ack
+                // On sort du while seulement si on a le bon ack
                 if (PDU.header.ack && PDU.header.ack_num == PE) {
-                    b = 1;
+                    fin = 1;
                 }
             }
         }
@@ -223,15 +231,19 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
     printf("[MIC-TCP] Appel de la fonction: "); 
 	printf(__FUNCTION__); 
 	printf("\n");
+
+	// Header de notre PDU
+	pdu.header.ack_num     = PA;
+	pdu.header.ack         = 1;
+
 	
-    if (pdu.header.seq_num == PA){
-        // On ne peut envoyer/recevoir qu'un message à la fois
-        PA = (PA+1) %2;
+    IP_send(pdu, addr);
+
+	if (pdu.header.seq_num == PA){
         // Insertion des données utiles (message + taille) du PDU dans le buffer de réception du socket
         app_buffer_put(pdu.payload);
+		sock.state = ESTABLISHED;
+		// On ne peut envoyer/recevoir qu'un message à la fois
+        PA = (PA+1) %2;
     }
-    pdu.header.ack = 1;
-	pdu.header.ack_num = PA;
-    IP_send(pdu, addr_socket_dest);
-	sock.state = ESTABLISHED;
 }
