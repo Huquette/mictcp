@@ -1,16 +1,37 @@
 #include <mictcp.h>
 #include <../include/api/mictcp_core.h> 
 
-#define PERTES_ADM 0
+#define TAUX_PERTES 30
+#define PERTES_ADM 20
 #define TIMER 10
+#define SIZE_WINDOW 10 // taille de la fenetre glissante
+
 
 // Variables globales :
 mic_tcp_sock sock;
 mic_tcp_sock_addr addr_socket_dest;
-int PE = 0;
-int PA = 0;
-int nb_envoyes = 0;
+int PE = 0; // prochaine trame à émettre
+int PA = 0; // prochaine trame attendue
 int numero_paquet = 0;
+int fenetre[SIZE_WINDOW] = {0,0,0,0,0,0,0,0,0,0};  // creation de la fenetre glissante
+int index_fenetre = 0; 
+
+
+void print_window(){
+	// affichage de la fenetre :
+	printf("voici la fenetre :  \n ");
+	for(int i=0 ; i<SIZE_WINDOW ; i++){
+		printf("%d\n ", (int)fenetre[i]);
+	} 
+} 
+
+int verif_taux_ok(){
+	int nb_perdus = 0;
+	for(int i=0 ; i<SIZE_WINDOW ; i++){
+		nb_perdus += fenetre[i]; 
+	} 
+	return 100*nb_perdus/SIZE_WINDOW < PERTES_ADM;
+} 
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -33,8 +54,8 @@ int mic_tcp_socket(start_mode sm)
 		sock.fd = 0;
 		// Etat du socket
 		sock.state = IDLE;
-		// Permet de réguler le pourcentage de pertes admissibles
-		set_loss_rate(PERTES_ADM);
+		// Permet de réguler le pourcentage de pertes
+		set_loss_rate(TAUX_PERTES);
 		return sock.fd;
 	}
 }
@@ -116,7 +137,7 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 	
 	mic_tcp_pdu PDU;
 	int sent_size;
-	
+
 	if ((sock.fd == mic_sock) && (sock.state == ESTABLISHED)){
 		// On construit le PDU : header et payload
 		PDU.header.source_port = sock.addr.port;
@@ -128,32 +149,48 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 		
 		PDU.payload.data 	   = mesg;
 		PDU.payload.size	   = mesg_size;
-
-		PE = (PE+1)%2;
-
+	
+		numero_paquet++;
         int fin = 0;
+
+		// envoi du PDU
+		if ((sent_size = IP_send(PDU, addr_socket_dest)) == -1){
+			printf("Erreur sur l'IP_send\n");
+		} 
+
+        sock.state = ATTENTE_ACK;
+
         while(!fin) {
-            sent_size = IP_send(PDU, addr_socket_dest);
-			printf("Envoi du paquet : %d, tentative n° : %d.\n",numero_paquet,nb_envoyes);
-			numero_paquet++;
-        	nb_envoyes++;
-            sock.state = WAITING_FOR_ACK;
-            // Activation du timer:
+            // Activation du timer et vérification de l'envoi
             if (IP_recv(&PDU, &addr_socket_dest, TIMER) == -1) {
-                // On renvoie le PDU si le timer a expiré
-                sent_size = IP_send(PDU, addr_socket_dest);
-				printf("Renvoi du paquet : %d, tentative n° : %d.\n",numero_paquet,nb_envoyes);
-				nb_envoyes++;
-            }
-            // Si le timer n'a pas expiré
+				if (!verif_taux_ok()) {
+					// On renvoie le PDU car le taux de perte est trop élevé
+					if ((sent_size = IP_send(PDU, addr_socket_dest)) == -1){
+						printf("Erreur sur l'IP_send\n");
+					}
+					printf("Renvoi du paquet n°%d\n", numero_paquet);
+					PE = (PE+1)%2;
+				} else {
+					// paquet perdu, perte acceptable
+					printf("On accepte la perte du paquet n°%d\n", numero_paquet);
+					PE = (PE+1)%2;
+					fenetre[index_fenetre] = 1;
+					print_window();
+					fin = 1;
+				}
+            }			
+            // L'envoi a réussi
             else {
-                // On sort du while seulement si on a le bon ack
-                if (PDU.header.ack && PDU.header.ack_num == PE) {
-                    fin = 1;
-                }
+				if (PDU.header.ack && PDU.header.ack_num == PE) {
+					PE = (PE+1)%2;
+					fenetre[index_fenetre] = 0; 
+					fin = 1;
+					printf("envoi du paquet  n°%d\n", numero_paquet);
+				}
             }
         }
-
+		
+		index_fenetre = (index_fenetre + 1) % SIZE_WINDOW;
         sock.state = ESTABLISHED;
 		return sent_size;
 	} 
@@ -175,7 +212,7 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
 	printf("\n");
 	
 	mic_tcp_payload PDU;
-	int nbr_octets_lus;
+	int nbr_octets_lus = -1;
 	
 	// Payload
 	PDU.data = mesg;
@@ -234,16 +271,19 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
 
 	// Header de notre PDU
 	pdu.header.ack_num     = PA;
-	pdu.header.ack         = 1;
-
-	
-    IP_send(pdu, addr);
+	pdu.header.ack         = 1;	
+    
+	printf("PA vaut %d et seq_num vaut %d\n", PA, pdu.header.seq_num);
 
 	if (pdu.header.seq_num == PA){
         // Insertion des données utiles (message + taille) du PDU dans le buffer de réception du socket
         app_buffer_put(pdu.payload);
-		sock.state = ESTABLISHED;
+		
 		// On ne peut envoyer/recevoir qu'un message à la fois
         PA = (PA+1) %2;
     }
+
+	// Envoi
+	IP_send(pdu, addr);
+	printf("On est prêt à recevoir le PA n°%d\n", PA);
 }
