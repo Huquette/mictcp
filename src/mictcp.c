@@ -13,16 +13,19 @@ mic_tcp_sock_addr addr_socket_dest;
 int PE = 0; // prochaine trame à émettre
 int PA = 0; // prochaine trame attendue
 int numero_paquet = 0;
-int fenetre[SIZE_WINDOW] = {0,0,0,0,0,0,0,0,0,0};  // creation de la fenetre glissante
-int index_fenetre = 0; 
 
+/* creation de la fenetre glissante
+le tableau sera initialisé avec que des 0 */
+int fenetre[SIZE_WINDOW];
+int index_fenetre = 0;
 
 void print_window(){
 	// affichage de la fenetre :
-	printf("voici la fenetre :  \n ");
+	printf("fenetre :  {");
 	for(int i=0 ; i<SIZE_WINDOW ; i++){
-		printf("%d\n ", (int)fenetre[i]);
+		printf("%d, ", (int)fenetre[i]);
 	} 
+	printf("}\n");
 } 
 
 int verif_taux_ok(){
@@ -72,6 +75,7 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
    
    // Il faut vérifier que c'est le bon socket
    if (sock.fd == socket){
+	   //PA = 1;
 	   // memcpy car c'est une copie d'une structure à une autre
 	   memcpy((char*)&sock.addr,(char*)&addr, sizeof(mic_tcp_sock_addr));
 	   return 0;
@@ -135,61 +139,61 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 	printf(__FUNCTION__); 
 	printf("\n");
 	
-	mic_tcp_pdu PDU;
+	mic_tcp_pdu PDU, PDU_recv;
+	mic_tcp_sock_addr addr_dist;
 	int sent_size;
+	int recv_size;
 
 	if ((sock.fd == mic_sock) && (sock.state == ESTABLISHED)){
 		// On construit le PDU : header et payload
 		PDU.header.source_port = sock.addr.port;
 		PDU.header.dest_port   = addr_socket_dest.port;
         PDU.header.seq_num     = PE;
-		PDU.header.syn         = 0;
-		PDU.header.ack		   = 0;
-		PDU.header.fin		   = 0;
 		
 		PDU.payload.data 	   = mesg;
 		PDU.payload.size	   = mesg_size;
 	
 		numero_paquet++;
-        int fin = 0;
+		PE = (PE+1)%2;
 
-		// envoi du PDU
-		if ((sent_size = IP_send(PDU, addr_socket_dest)) == -1){
-			printf("Erreur sur l'IP_send\n");
-		} 
+		sock.state = ATTENTE_ACK;
 
-        sock.state = ATTENTE_ACK;
+		int sent = 0; //boolean that checks whether the msg has correctly been sent or not
 
-        while(!fin) {
-            // Activation du timer et vérification de l'envoi
-            if (IP_recv(&PDU, &addr_socket_dest, TIMER) == -1) {
+        while(!sent) {
+			// envoi du PDU
+			if ((sent_size = IP_send(PDU, addr_socket_dest)) == -1){
+				printf("Erreur sur l'IP_send\n");
+			} 
+
+            // Activation du timer
+			recv_size = IP_recv(&PDU_recv, &addr_dist, TIMER);
+			printf("PDU ack num %d et PE %d\n", PDU_recv.header.ack_num, PE);
+			
+			// PDU non reçu
+            if (recv_size < 0) {
 				if (!verif_taux_ok()) {
-					// On renvoie le PDU car le taux de perte est trop élevé
-					if ((sent_size = IP_send(PDU, addr_socket_dest)) == -1){
-						printf("Erreur sur l'IP_send\n");
-					}
+					// On renvoie le PDU en recommençant la boucle car le taux de perte est trop élevé
 					printf("Renvoi du paquet n°%d\n", numero_paquet);
-					PE = (PE+1)%2;
 				} else {
 					// paquet perdu, perte acceptable
 					printf("On accepte la perte du paquet n°%d\n", numero_paquet);
-					PE = (PE+1)%2;
 					fenetre[index_fenetre] = 1;
-					print_window();
-					fin = 1;
+					sent = 1;
 				}
-            }			
+            }	
+
             // L'envoi a réussi
             else {
-				if (PDU.header.ack && PDU.header.ack_num == PE) {
-					PE = (PE+1)%2;
-					fenetre[index_fenetre] = 0; 
-					fin = 1;
+				if (PDU_recv.header.ack && PDU_recv.header.ack_num == PE) {
 					printf("envoi du paquet  n°%d\n", numero_paquet);
+					fenetre[index_fenetre] = 0; 
+					sent = 1;
 				}
             }
         }
 		
+		print_window();
 		index_fenetre = (index_fenetre + 1) % SIZE_WINDOW;
         sock.state = ESTABLISHED;
 		return sent_size;
@@ -244,7 +248,7 @@ int mic_tcp_close (int socket)
 {
     printf("[MIC-TCP] Appel de la fonction :  "); 
 	printf(__FUNCTION__); 
-	printf("\n");
+	printf("\n\n");
 	
 	// Si c'est le bon socket et que la connexion est en cours
 	if ((sock.fd == socket) && (sock.state == ESTABLISHED)){
@@ -268,22 +272,23 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
     printf("[MIC-TCP] Appel de la fonction: "); 
 	printf(__FUNCTION__); 
 	printf("\n");
-
-	// Header de notre PDU
-	pdu.header.ack_num     = PA;
-	pdu.header.ack         = 1;	
     
 	printf("PA vaut %d et seq_num vaut %d\n", PA, pdu.header.seq_num);
-
-	if (pdu.header.seq_num == PA){
+	
+	if (pdu.header.seq_num == PA) {
         // Insertion des données utiles (message + taille) du PDU dans le buffer de réception du socket
         app_buffer_put(pdu.payload);
-		
-		// On ne peut envoyer/recevoir qu'un message à la fois
-        PA = (PA+1) %2;
+		PA = (PA+1) %2;
     }
+	
+	mic_tcp_pdu ack;
+	// Header de notre ACK
+	ack.header.source_port = sock.addr.port;
+  	ack.header.dest_port   = addr.port;
+	ack.header.ack_num     = PA;
+	ack.header.ack         = 1;	
 
 	// Envoi
-	IP_send(pdu, addr);
+	IP_send(ack, addr);
 	printf("On est prêt à recevoir le PA n°%d\n", PA);
 }
