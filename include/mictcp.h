@@ -21,7 +21,7 @@
  */
 typedef enum protocol_state
 {
-    IDLE, CLOSED, SYN_SENT, SYN_RECEIVED, ESTABLISHED, CLOSING, ATTENTE_ACK, ATTENTE_SYN
+    IDLE, CLOSED, SYN_SENT, SYN_RECEIVED, ESTABLISHED, CLOSING, ATTENTE_ACK, ATTENTE_SYN, ATTENTE_SYNACK
 } protocol_state;
 
 /*
@@ -71,6 +71,7 @@ typedef struct mic_tcp_header
   unsigned char syn; /* flag SYN (valeur 1 si activé et 0 si non) */
   unsigned char ack; /* flag ACK (valeur 1 si activé et 0 si non) */
   unsigned char fin; /* flag FIN (valeur 1 si activé et 0 si non) */
+  unsigned int pertes;
 } mic_tcp_header;
 
 /*
