@@ -2,6 +2,8 @@
 #include <../include/api/mictcp_core.h> 
 #include <pthread.h>
 
+//TODO : remplacer par des perror + ajouter des return -1
+
 #define TAUX_PERTES 5
 #define TIMER 10
 #define SIZE_WINDOW 100 // taille de la fenetre glissante
@@ -9,8 +11,8 @@
 
 
 // Variables globales :
-mic_tcp_sock sock;
-mic_tcp_sock_addr addr_socket_dest;
+mic_tcp_sock sock = {0};
+mic_tcp_sock_addr addr_socket_dest = {0};
 int PE = 0; // prochaine trame à émettre
 int PA = 0; // prochaine trame attendue
 int numero_paquet = 0;
@@ -49,7 +51,6 @@ int verif_taux_ok(){
  */
 int mic_tcp_socket(start_mode sm)
 {
-	int result = -1;
 	printf("[MIC-TCP] Appel de la fonction: ");  
 	printf(__FUNCTION__); 
 	printf("\n");
@@ -64,7 +65,7 @@ int mic_tcp_socket(start_mode sm)
 	}
    
 	/* Appel obligatoire */   
-	if ((result = initialize_components(sm)) == -1){ 
+	if (initialize_components(sm) == -1){ 
         perror("erreur de création de socket\n");
 		return -1;
 	}
@@ -187,7 +188,7 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 		
 		int synack_recu = 0;
 
-		// TODO check aussi le nb d'envois jusqu'ici
+		// on vérifie que le nb d'envois jusqu'ici n'est pas trop élevé
 		while (!synack_recu && nbEchecs < MAX_ECHECS) {
 			nbEchecs++;
 
@@ -200,7 +201,7 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 
 			// Activation du timer
 			mic_tcp_pdu synack_recv = {0};
-			mic_tcp_sock_addr addr_dist;
+			mic_tcp_sock_addr addr_dist = {0};
 
 			if (IP_recv(&synack_recv, &addr_dist, TIMER) == -1) {
 				printf("pb réception synack\n");
@@ -237,7 +238,8 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 
 		if (nbEchecs == MAX_ECHECS) {
 			printf("Trop d'échecs, on est faible et on abandonne\n");
-			return 1;
+			sock.state = CLOSING;
+			return -1;
 		}
 
 		sock.state = ESTABLISHED;
@@ -261,7 +263,7 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 	
 	mic_tcp_pdu PDU = {0};
 	mic_tcp_pdu PDU_recv = {0};
-	mic_tcp_sock_addr addr_dist;
+	mic_tcp_sock_addr addr_dist = {0};
 	int sent_size;
 	int recv_size;
 	
@@ -336,7 +338,7 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
 	printf(__FUNCTION__); 
 	printf("\n");
 	
-	mic_tcp_payload PDU;
+	mic_tcp_payload PDU = {0};
 	int nbr_octets_lus = -1;
 	
 	// Payload
