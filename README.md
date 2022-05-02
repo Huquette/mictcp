@@ -1,3 +1,6 @@
+## Binôme : Hasson Hugo & Mousset Sarah
+On est allés jusqu'à la v4.1, celle-ci fonctionne pour le transfert de texte mais ne semble pas fonctionner pour la vidéo. Toutes les autres versions fonctionnaient dans les deux cas.
+
 # BE RESEAU
 ## TPs BE Reseau - 3 MIC
 
